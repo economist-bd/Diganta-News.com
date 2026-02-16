@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -16,12 +16,13 @@ import {
   doc, 
   onSnapshot, 
   query, 
-  serverTimestamp 
+  serverTimestamp,
+  setDoc
 } from 'firebase/firestore';
 import { 
-  Menu, X, Search, User, LogIn, Edit3, Trash2, 
-  Plus, Image as ImageIcon, Layout, ShieldCheck, 
-  Share2, Download, LogOut, ChevronRight, AlertTriangle
+  Menu, X, Search, User, ShieldCheck, Edit3, Trash2, 
+  Plus, Image as ImageIcon, Layout, Save,
+  Share2, Download, LogOut, ChevronRight, AlertTriangle, Link as LinkIcon, Upload
 } from 'lucide-react';
 
 // --- Firebase Config ---
@@ -39,7 +40,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
-const appId = 'diganta-news-pwa'; 
+const appId = 'diganta-news-pwa-v2'; 
 
 // --- Helper Functions ---
 const getBanglaDate = () => {
@@ -48,20 +49,19 @@ const getBanglaDate = () => {
   return date.toLocaleDateString('bn-BD', options);
 };
 
-const resizeImage = (file) => {
+const resizeImage = (file, maxWidth = 800) => {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (event) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 800; 
-        const scaleSize = MAX_WIDTH / img.width;
-        canvas.width = MAX_WIDTH;
+        const scaleSize = maxWidth / img.width;
+        canvas.width = maxWidth;
         canvas.height = img.height * scaleSize;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.6)); 
+        resolve(canvas.toDataURL('image/jpeg', 0.7)); 
       };
       img.src = event.target.result;
     };
@@ -69,7 +69,7 @@ const resizeImage = (file) => {
   });
 };
 
-const updateMetaTags = (title, image) => {
+const updateMetaTags = (title) => {
   document.title = title;
   let metaOgTitle = document.querySelector('meta[property="og:title"]');
   if (!metaOgTitle) {
@@ -80,9 +80,10 @@ const updateMetaTags = (title, image) => {
   metaOgTitle.content = title;
 };
 
-// --- Components ---
+// --- Components (Outside Main App to fix re-rendering focus loss) ---
 
 const RichTextEditor = ({ value, onChange }) => {
+  // Simple ref to maintain cursor position could be added, but moving component outside fixes 90% issues
   const insertTag = (tag) => {
     const textarea = document.getElementById('news-content');
     const start = textarea.selectionStart;
@@ -91,11 +92,20 @@ const RichTextEditor = ({ value, onChange }) => {
     const selection = text.substring(start, end);
     let newText = '';
 
-    if (tag === 'b') newText = text.substring(0, start) + `<b>${selection || 'বোল্ড টেক্সট'}</b>` + text.substring(end);
+    if (tag === 'b') newText = text.substring(0, start) + `<b>${selection || 'বোল্ড'}</b>` + text.substring(end);
     else if (tag === 'br') newText = text.substring(0, start) + `<br/>` + text.substring(end);
-    else if (tag === 'h3') newText = text.substring(0, start) + `<h3>${selection || 'সাব-হেডিং'}</h3>` + text.substring(end);
+    else if (tag === 'h3') newText = text.substring(0, start) + `<h3>${selection || 'হেডিং'}</h3>` + text.substring(end);
+    else if (tag === 'p') newText = text.substring(0, start) + `<p>${selection || 'প্যারাগ্রাফ'}</p>` + text.substring(end);
     
-    onChange(newText);
+    // Insert text and update
+    const newValue = newText;
+    onChange(newValue);
+    
+    // Restore focus (Micro-task to allow render)
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + newText.length, start + newText.length);
+    }, 0);
   };
 
   return (
@@ -103,17 +113,63 @@ const RichTextEditor = ({ value, onChange }) => {
       <div className="bg-gray-100 p-2 flex gap-2 border-b flex-wrap">
         <button type="button" onClick={() => insertTag('b')} className="px-3 py-1 bg-white border rounded font-bold hover:bg-red-50 text-sm">B</button>
         <button type="button" onClick={() => insertTag('h3')} className="px-3 py-1 bg-white border rounded font-bold hover:bg-red-50 text-sm">H3</button>
+        <button type="button" onClick={() => insertTag('p')} className="px-3 py-1 bg-white border rounded hover:bg-red-50 text-sm">P</button>
         <button type="button" onClick={() => insertTag('br')} className="px-3 py-1 bg-white border rounded hover:bg-red-50 text-sm">New Line</button>
       </div>
       <textarea
         id="news-content"
-        className="w-full h-48 p-4 focus:outline-none resize-none font-serif text-lg"
+        className="w-full h-64 p-4 focus:outline-none resize-none font-serif text-lg leading-relaxed"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="সংবাদের বিস্তারিত লিখুন (HTML ট্যাগ সমর্থিত)..."
+        placeholder="এখানে সংবাদ লিখুন..."
       />
     </div>
   );
+};
+
+const Navbar = ({ categories, activeCategory, setActiveCategory, setView }) => (
+  <nav className="sticky top-0 bg-white z-40 border-b shadow-sm">
+    <div className="container mx-auto">
+      <div className="flex items-center overflow-x-auto whitespace-nowrap scrollbar-hide px-4 py-3 gap-6 md:justify-center">
+          <button 
+            onClick={() => { setActiveCategory('সব খবর'); setView('home'); window.scrollTo(0,0); }}
+            className={`text-sm font-bold uppercase tracking-wider ${activeCategory === 'সব খবর' ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-700 hover:text-red-600'}`}
+          >
+            সব খবর
+          </button>
+          {categories.map(cat => (
+            <button 
+              key={cat.id}
+              onClick={() => { setActiveCategory(cat.name); setView('home'); window.scrollTo(0,0); }}
+              className={`text-sm font-bold uppercase tracking-wider ${activeCategory === cat.name ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-700 hover:text-red-600'}`}
+            >
+              {cat.name}
+            </button>
+          ))}
+      </div>
+    </div>
+  </nav>
+);
+
+const AdDisplay = ({ adData, className }) => {
+  if (!adData || !adData.image) return null;
+  
+  const Content = () => (
+    <img 
+      src={adData.image} 
+      alt="Advertisement" 
+      className={`w-full h-auto object-cover ${className}`} 
+    />
+  );
+
+  if (adData.link) {
+    return (
+      <a href={adData.link} target="_blank" rel="noopener noreferrer" className="block cursor-pointer hover:opacity-90 transition">
+        <Content />
+      </a>
+    );
+  }
+  return <Content />;
 };
 
 // --- Main App ---
@@ -124,11 +180,18 @@ export default function App() {
   const [articles, setArticles] = useState([]);
   const [categories, setCategories] = useState([]);
   const [permissionError, setPermissionError] = useState(false);
+  
+  // Settings with specific Ad Objects
   const [siteSettings, setSiteSettings] = useState({
     siteName: 'দিগন্ত',
+    logo: '', // Base64 logo
     editorName: 'মঞ্জুরুল হক',
-    ads: { header: '', sidebar: '' },
-    footerText: 'স্বত্ব © ২০২৬ দিগন্ত মিডিয়া'
+    footerText: 'স্বত্ব © ২০২৬ দিগন্ত মিডিয়া',
+    ads: {
+      header: { image: '', link: '' },
+      sidebar: { image: '', link: '' },
+      inArticle: { image: '', link: '' }
+    }
   });
   
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -142,7 +205,7 @@ export default function App() {
     title: '', content: '', category: 'বাংলাদেশ', image: '', isLead: false
   });
 
-  // --- Install Prompt Logic ---
+  // --- Install Prompt ---
   useEffect(() => {
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
@@ -166,11 +229,11 @@ export default function App() {
         setShowInstallBtn(false);
       }
     } else {
-      alert("ব্রাউজার মেনু থেকে 'Add to Home Screen' বা 'Install App' সিলেক্ট করুন।");
+      alert("ব্রাউজার মেনু থেকে 'Add to Home Screen' সিলেক্ট করুন।");
     }
   };
 
-  // --- Auth & Data ---
+  // --- Auth & Data Fetching ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -184,52 +247,47 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // Error Handling Wrapper
     const handleError = (error) => {
-      console.error("Firebase Error:", error);
-      if (error.code === 'permission-denied') {
-        setPermissionError(true);
-      }
+      console.error("Data Fetch Error:", error);
+      if (error.code === 'permission-denied') setPermissionError(true);
     };
 
-    // Articles Fetching
-    const unsubArticles = onSnapshot(
-      query(collection(db, 'artifacts', appId, 'public', 'data', 'articles')), 
+    // Articles
+    const unsubArticles = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'articles')), 
       (snap) => {
         const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         data.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
         setArticles(data);
-        setPermissionError(false); // Clear error if successful
-      }, 
-      handleError
-    );
+        setPermissionError(false);
+      }, handleError);
 
-    // Categories Fetching
-    const unsubCats = onSnapshot(
-      collection(db, 'artifacts', appId, 'public', 'data', 'categories'), 
+    // Categories
+    const unsubCats = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), 
       (snap) => {
         const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         if (data.length === 0 && isAdmin) {
-          try {
-             ['বাংলাদেশ', 'রাজনীতি', 'অর্থনীতি', 'আন্তর্জাতিক', 'খেলা', 'বিনোদন', 'প্রযুক্তি', 'মতামত'].forEach(name => 
-               addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name })
-             );
-          } catch(e) { console.error("Auto create failed", e); }
+           // Init categories
+           ['বাংলাদেশ', 'রাজনীতি', 'অর্থনীতি', 'আন্তর্জাতিক', 'খেলা', 'বিনোদন', 'প্রযুক্তি', 'মতামত'].forEach(name => 
+             addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name })
+           );
         } else {
           setCategories(data);
         }
-      }, 
-      handleError
-    );
+      }, handleError);
 
-    // Settings Fetching
-    const unsubSettings = onSnapshot(
-      doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), 
+    // Settings
+    const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), 
       (snap) => {
-        if (snap.exists()) setSiteSettings(snap.data());
-      }, 
-      handleError
-    );
+        if (snap.exists()) {
+          const data = snap.data();
+          // Merge with default structure to prevent errors if fields are missing
+          setSiteSettings(prev => ({
+            ...prev,
+            ...data,
+            ads: { ...prev.ads, ...data.ads } // Deep merge ads
+          }));
+        }
+      }, handleError);
 
     return () => { unsubArticles(); unsubCats(); unsubSettings(); };
   }, [isAdmin]);
@@ -240,8 +298,7 @@ export default function App() {
       await signInWithPopup(auth, googleProvider);
       setView('home'); 
     } catch (error) {
-      console.error(error);
-      alert("লগইন ব্যর্থ হয়েছে: " + error.message);
+      alert("লগইন সমস্যা: " + error.message);
     }
   };
 
@@ -252,7 +309,7 @@ export default function App() {
   };
 
   const handleSaveArticle = async () => {
-    if (!isAdmin) return alert("শুধুমাত্র এডমিন পোস্ট করতে পারবেন");
+    if (!isAdmin) return alert("পারমিশন নেই");
     if (!formData.title) return alert('শিরোনাম দিন');
     
     const payload = {
@@ -269,10 +326,9 @@ export default function App() {
       }
       setEditArticle(null);
       setFormData({ title: '', content: '', category: 'বাংলাদেশ', image: '', isLead: false });
-      alert('সংবাদ সফলভাবে সংরক্ষিত হয়েছে');
+      alert('সফলভাবে সংরক্ষিত হয়েছে');
     } catch (e) {
-      console.error(e);
-      alert('ত্রুটি হয়েছে: পারমিশন নেই অথবা ইন্টারনেট সমস্যা');
+      alert('ত্রুটি: ' + e.message);
     }
   };
 
@@ -283,38 +339,39 @@ export default function App() {
     }
   };
 
-  const handleImageUpload = async (e) => {
-    if (e.target.files[0]) {
-      const base64 = await resizeImage(e.target.files[0]);
-      setFormData({ ...formData, image: base64 });
+  const handleImageUpload = async (e, field) => {
+    const file = e.target.files[0];
+    if (file) {
+      const base64 = await resizeImage(file, 800);
+      if (field === 'article') {
+        setFormData({ ...formData, image: base64 });
+      } else if (field === 'logo') {
+        handleSettingUpdate('logo', base64);
+      } else if (field.startsWith('ad_')) {
+        const adType = field.split('_')[1]; // header, sidebar, inArticle
+        const newAds = { ...siteSettings.ads, [adType]: { ...siteSettings.ads[adType], image: base64 } };
+        handleSettingUpdate('ads', newAds);
+      }
     }
   };
 
-  // --- Views ---
+  const handleSettingUpdate = async (key, value) => {
+    const newSettings = { ...siteSettings, [key]: value };
+    setSiteSettings(newSettings);
+    // Save directly to database
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), newSettings);
+    } catch (e) {
+      console.error("Settings Save Failed", e);
+    }
+  };
 
-  const Navbar = () => (
-    <nav className="sticky top-0 bg-white z-40 border-b shadow-sm">
-      <div className="container mx-auto">
-        <div className="flex items-center overflow-x-auto whitespace-nowrap scrollbar-hide px-4 py-3 gap-6 md:justify-center">
-            <button 
-              onClick={() => { setActiveCategory('সব খবর'); setView('home'); window.scrollTo(0,0); }}
-              className={`text-sm font-bold uppercase tracking-wider ${activeCategory === 'সব খবর' ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-700 hover:text-red-600'}`}
-            >
-              সব খবর
-            </button>
-            {categories.map(cat => (
-              <button 
-                key={cat.id}
-                onClick={() => { setActiveCategory(cat.name); setView('home'); window.scrollTo(0,0); }}
-                className={`text-sm font-bold uppercase tracking-wider ${activeCategory === cat.name ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-700 hover:text-red-600'}`}
-              >
-                {cat.name}
-              </button>
-            ))}
-        </div>
-      </div>
-    </nav>
-  );
+  const handleAdLinkUpdate = (adType, link) => {
+    const newAds = { ...siteSettings.ads, [adType]: { ...siteSettings.ads[adType], link: link } };
+    handleSettingUpdate('ads', newAds);
+  };
+
+  // --- Views ---
 
   const HomeView = () => {
     const filtered = activeCategory === 'সব খবর' ? articles : articles.filter(a => a.category === activeCategory);
@@ -322,13 +379,10 @@ export default function App() {
     const others = filtered.filter(a => a.id !== lead?.id);
 
     return (
-      <div className="animate-fade-in">
+      <div className="animate-fade-in pb-10">
         {permissionError && (
-          <div className="bg-red-600 text-white p-4 text-center">
-             <div className="flex items-center justify-center gap-2 font-bold mb-1">
-               <AlertTriangle/> ডাটাবেজ পারমিশন সমস্যা
-             </div>
-             <p className="text-sm">দয়া করে ফায়ারবেস কনসোলের <b>Firestore Database {'>'} Rules</b> ট্যাবে গিয়ে নিচের রুলস আপডেট করুন।</p>
+          <div className="bg-red-600 text-white p-2 text-center text-sm">
+             ডাটাবেজ পারমিশন সমস্যা। ফায়ারবেস রুলস চেক করুন।
           </div>
         )}
 
@@ -350,25 +404,33 @@ export default function App() {
               )}
             </div>
           </div>
-          <div className="text-center py-4 relative">
-            <h1 className="text-5xl md:text-7xl font-extrabold text-black font-serif cursor-pointer tracking-tight" onClick={() => setView('home')}>
-              {siteSettings.siteName}
-            </h1>
-            {siteSettings.ads.header && (
-              <div className="hidden lg:block absolute right-4 top-2">
-                <img src={siteSettings.ads.header} alt="Ad" className="h-16 w-auto" />
-              </div>
-            )}
+          
+          <div className="container mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+             {/* Logo or Site Name */}
+             <div className="cursor-pointer" onClick={() => setView('home')}>
+                {siteSettings.logo ? (
+                  <img src={siteSettings.logo} alt="Logo" className="h-16 md:h-20 object-contain" />
+                ) : (
+                  <h1 className="text-5xl font-extrabold text-black font-serif tracking-tight">{siteSettings.siteName}</h1>
+                )}
+             </div>
+
+             {/* Header Ad */}
+             {siteSettings.ads?.header?.image && (
+               <div className="w-full md:w-auto max-w-[728px]">
+                 <AdDisplay adData={siteSettings.ads.header} className="h-auto max-h-24 w-auto mx-auto rounded" />
+               </div>
+             )}
           </div>
         </div>
 
-        <Navbar />
+        <Navbar categories={categories} activeCategory={activeCategory} setActiveCategory={setActiveCategory} setView={setView} />
 
         <div className="container mx-auto px-4 py-6">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div className="lg:col-span-9">
               {lead && (
-                <div onClick={() => { setSelectedArticle(lead); setView('article'); updateMetaTags(lead.title, lead.image); }} className="mb-8 cursor-pointer group">
+                <div onClick={() => { setSelectedArticle(lead); setView('article'); updateMetaTags(lead.title); }} className="mb-8 cursor-pointer group">
                   <div className="grid md:grid-cols-2 gap-6 items-start">
                     <div className="order-2 md:order-1">
                       <span className="text-red-600 font-bold text-sm mb-2 inline-block">{lead.category}</span>
@@ -378,7 +440,6 @@ export default function App() {
                       <p className="text-gray-600 mt-3 text-lg line-clamp-3 leading-relaxed">
                         {lead.content.replace(/<[^>]+>/g, '')}
                       </p>
-                      <span className="text-xs text-gray-400 mt-4 block">আপডেট: কিছুক্ষণ আগে</span>
                     </div>
                     <div className="order-1 md:order-2">
                       <div className="overflow-hidden rounded-lg aspect-video bg-gray-100">
@@ -393,15 +454,11 @@ export default function App() {
                 </div>
               )}
 
-              {!lead && !permissionError && (
-                 <div className="text-center py-20 text-gray-400">কোনো সংবাদ লোড হয়নি (ডাটাবেজ খালি অথবা লোড হচ্ছে...)</div>
-              )}
-
               <div className="border-t border-gray-200 my-6"></div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
                 {others.map(news => (
-                  <div key={news.id} onClick={() => { setSelectedArticle(news); setView('article'); updateMetaTags(news.title, news.image); }} className="cursor-pointer group flex flex-col h-full">
+                  <div key={news.id} onClick={() => { setSelectedArticle(news); setView('article'); updateMetaTags(news.title); }} className="cursor-pointer group flex flex-col h-full">
                     <div className="overflow-hidden rounded-lg mb-3 aspect-video bg-gray-100">
                       {news.image && <img src={news.image} className="w-full h-full object-cover transform group-hover:scale-105 transition duration-300" />}
                     </div>
@@ -417,11 +474,14 @@ export default function App() {
             </div>
 
             <div className="lg:col-span-3 space-y-8 border-l border-gray-100 pl-0 lg:pl-6">
-               {siteSettings.ads.sidebar && (
-                 <div className="bg-gray-50 flex items-center justify-center min-h-[250px] rounded border">
-                   <img src={siteSettings.ads.sidebar} alt="Ad" className="w-full" />
+               {/* Sidebar Ad */}
+               {siteSettings.ads?.sidebar?.image && (
+                 <div className="bg-gray-50 rounded border overflow-hidden">
+                   <AdDisplay adData={siteSettings.ads.sidebar} />
+                   <p className="text-[10px] text-center text-gray-400">বিজ্ঞাপন</p>
                  </div>
                )}
+
                <div>
                  <h4 className="font-bold text-xl border-b-2 border-red-600 inline-block mb-4 pr-4">সর্বাধিক পঠিত</h4>
                  <div className="space-y-4">
@@ -436,13 +496,33 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {/* Footer */}
+        <footer className="bg-gray-900 text-white mt-12 py-12">
+            <div className="container mx-auto px-4 text-center">
+                {siteSettings.logo ? (
+                  <img src={siteSettings.logo} className="h-16 mx-auto mb-4 filter brightness-0 invert" alt="logo"/>
+                ) : (
+                  <h2 className="text-2xl font-bold mb-4">{siteSettings.siteName}</h2>
+                )}
+                <p className="text-gray-400 mb-2">সম্পাদক: {siteSettings.editorName}</p>
+                <div className="flex justify-center gap-4 mb-6">
+                    <a href="#" className="hover:text-red-500">Facebook</a>
+                    <a href="#" className="hover:text-red-500">Twitter</a>
+                    <a href="#" className="hover:text-red-500">Youtube</a>
+                </div>
+                <div className="border-t border-gray-800 pt-6">
+                   <p className="text-sm text-gray-500">{siteSettings.footerText}</p>
+                </div>
+            </div>
+        </footer>
       </div>
     );
   };
 
   const ArticleView = () => (
     <div className="bg-white min-h-screen pb-10">
-      <Navbar />
+      <Navbar categories={categories} activeCategory={activeCategory} setActiveCategory={setActiveCategory} setView={setView} />
       <div className="container mx-auto px-4 py-6 max-w-4xl">
          <div className="flex gap-2 text-sm text-gray-500 mb-4">
             <span className="text-red-600 font-bold cursor-pointer" onClick={() => setView('home')}>হোম</span> 
@@ -472,11 +552,27 @@ export default function App() {
            </div>
          )}
 
+         {/* In-Article Ad (Visible in every article) */}
+         {siteSettings.ads?.inArticle?.image && (
+           <div className="my-8 flex justify-center bg-gray-50 py-4 border-y">
+             <div className="max-w-[80%]">
+                <AdDisplay adData={siteSettings.ads.inArticle} />
+                <p className="text-[10px] text-center text-gray-400 mt-1">বিজ্ঞাপন</p>
+             </div>
+           </div>
+         )}
+
          <div 
            className="prose prose-lg max-w-none font-serif text-gray-800 leading-relaxed"
            dangerouslySetInnerHTML={{ __html: selectedArticle.content }}
          />
       </div>
+       {/* Footer */}
+       <footer className="bg-gray-900 text-white mt-12 py-12">
+            <div className="container mx-auto px-4 text-center">
+                <p className="text-sm text-gray-500">{siteSettings.footerText}</p>
+            </div>
+        </footer>
     </div>
   );
 
@@ -487,7 +583,7 @@ export default function App() {
           <h2 className="text-xl font-bold flex items-center gap-2 text-red-600"><ShieldCheck/> এডমিন প্যানেল</h2>
           <div className="flex gap-3">
              <span className="hidden md:block text-sm py-2 px-3 bg-red-50 text-red-600 rounded">
-               {user?.email} হিসেবে লগইন করা
+               {user?.email}
              </span>
             <button onClick={() => setView('home')} className="bg-gray-100 px-4 py-2 rounded hover:bg-gray-200 text-sm">প্রিভিউ</button>
             <button onClick={handleLogout} className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-sm">লগ আউট</button>
@@ -516,27 +612,21 @@ export default function App() {
                    </select>
                    <div className="flex items-center gap-2 border px-3 rounded bg-gray-50 cursor-pointer relative overflow-hidden flex-1 justify-center">
                       <ImageIcon size={18} className="text-gray-500"/>
-                      <span className="text-sm text-gray-600">{formData.image ? 'ছবি যুক্ত হয়েছে' : 'ছবি আপলোড'}</span>
-                      <input type="file" onChange={handleImageUpload} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*"/>
+                      <span className="text-sm text-gray-600">{formData.image ? 'ছবি যুক্ত' : 'ছবি'}</span>
+                      <input type="file" onChange={(e) => handleImageUpload(e, 'article')} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*"/>
                    </div>
                 </div>
                 
                 <div className="flex items-center gap-2 my-2">
-                   <input 
-                    type="checkbox" 
-                    id="leadCheck" 
-                    checked={formData.isLead}
-                    onChange={e => setFormData({...formData, isLead: e.target.checked})}
-                    className="w-4 h-4 text-red-600"
-                   />
-                   <label htmlFor="leadCheck" className="text-sm font-bold text-red-600">লিড নিউজ (বড় করে দেখাবে)</label>
+                   <input type="checkbox" id="leadCheck" checked={formData.isLead} onChange={e => setFormData({...formData, isLead: e.target.checked})} className="w-4 h-4 text-red-600" />
+                   <label htmlFor="leadCheck" className="text-sm font-bold text-red-600">লিড নিউজ</label>
                 </div>
 
                 <RichTextEditor value={formData.content} onChange={(val) => setFormData({...formData, content: val})} />
                 
                 <div className="flex justify-end gap-3 pt-2">
                   {editArticle && <button onClick={() => { setEditArticle(null); setFormData({title: '', content: '', category: 'বাংলাদেশ', image: '', isLead: false}); }} className="px-4 py-2 bg-gray-200 rounded">বাতিল</button>}
-                  <button onClick={handleSaveArticle} className="px-6 py-2 bg-red-600 text-white font-bold rounded hover:bg-red-700">সংরক্ষণ করুন</button>
+                  <button onClick={handleSaveArticle} className="px-6 py-2 bg-red-600 text-white font-bold rounded hover:bg-red-700 flex items-center gap-2"><Save size={16}/> সংরক্ষণ করুন</button>
                 </div>
              </div>
           </div>
@@ -561,28 +651,85 @@ export default function App() {
         </div>
 
         <div className="space-y-6">
+           {/* General Settings */}
            <div className="bg-white p-6 rounded shadow">
-              <h3 className="font-bold border-b pb-2 mb-4 flex items-center gap-2"><Layout size={18}/> বিজ্ঞাপন সেটিংস</h3>
+              <h3 className="font-bold border-b pb-2 mb-4">সাইট সেটিংস</h3>
               <div className="space-y-3">
                  <div>
-                   <label className="text-xs font-bold text-gray-500">হেডার বিজ্ঞাপন (URL)</label>
-                   <input 
-                     value={siteSettings.ads.header}
-                     onChange={e => setSiteSettings({...siteSettings, ads: {...siteSettings.ads, header: e.target.value}})}
-                     className="w-full text-xs p-2 border rounded mt-1" 
-                     placeholder="Image Link"
-                   />
+                   <label className="text-xs font-bold text-gray-500">সাইটের নাম</label>
+                   <input value={siteSettings.siteName} onChange={e => handleSettingUpdate('siteName', e.target.value)} className="w-full text-xs p-2 border rounded"/>
                  </div>
                  <div>
-                   <label className="text-xs font-bold text-gray-500">সাইডবার বিজ্ঞাপন (URL)</label>
-                   <input 
-                     value={siteSettings.ads.sidebar}
-                     onChange={e => setSiteSettings({...siteSettings, ads: {...siteSettings.ads, sidebar: e.target.value}})}
-                     className="w-full text-xs p-2 border rounded mt-1" 
-                     placeholder="Image Link"
-                   />
+                   <label className="text-xs font-bold text-gray-500">লোগো আপলোড</label>
+                   <div className="border border-dashed p-2 rounded flex items-center justify-center relative bg-gray-50 cursor-pointer">
+                      {siteSettings.logo ? <img src={siteSettings.logo} className="h-8"/> : <span className="text-xs text-gray-400">Upload Logo</span>}
+                      <input type="file" onChange={(e) => handleImageUpload(e, 'logo')} className="absolute inset-0 opacity-0" accept="image/*"/>
+                   </div>
                  </div>
-                 <button onClick={() => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), siteSettings).then(() => alert('সেভ হয়েছে'))} className="w-full py-2 bg-gray-800 text-white text-xs rounded mt-2">আপডেট করুন</button>
+                 <div>
+                   <label className="text-xs font-bold text-gray-500">ফুটার টেক্সট</label>
+                   <input value={siteSettings.footerText} onChange={e => handleSettingUpdate('footerText', e.target.value)} className="w-full text-xs p-2 border rounded"/>
+                 </div>
+              </div>
+           </div>
+
+           {/* Ads Manager */}
+           <div className="bg-white p-6 rounded shadow">
+              <h3 className="font-bold border-b pb-2 mb-4 flex items-center gap-2"><Layout size={18}/> বিজ্ঞাপন ম্যানেজ করুন</h3>
+              
+              {/* Header Ad Config */}
+              <div className="mb-4 border-b pb-4">
+                <label className="text-xs font-bold text-red-600 block mb-2">১. হেডার বিজ্ঞাপন</label>
+                <div className="flex gap-2 mb-2">
+                   <div className="relative border p-2 w-16 h-12 bg-gray-50 rounded flex items-center justify-center cursor-pointer">
+                      <ImageIcon size={16} className="text-gray-400"/>
+                      <input type="file" onChange={(e) => handleImageUpload(e, 'ad_header')} className="absolute inset-0 opacity-0" accept="image/*"/>
+                   </div>
+                   <input 
+                     value={siteSettings.ads?.header?.link || ''}
+                     onChange={(e) => handleAdLinkUpdate('header', e.target.value)}
+                     className="flex-1 text-xs p-2 border rounded" 
+                     placeholder="বিজ্ঞাপনের লিংক (Link)..."
+                   />
+                </div>
+                {siteSettings.ads?.header?.image && <p className="text-[10px] text-green-600">ছবি আপলোড হয়েছে</p>}
+              </div>
+
+              {/* Sidebar Ad Config */}
+              <div className="mb-4 border-b pb-4">
+                <label className="text-xs font-bold text-red-600 block mb-2">২. সাইডবার বিজ্ঞাপন</label>
+                <div className="flex gap-2 mb-2">
+                   <div className="relative border p-2 w-16 h-12 bg-gray-50 rounded flex items-center justify-center cursor-pointer">
+                      <ImageIcon size={16} className="text-gray-400"/>
+                      <input type="file" onChange={(e) => handleImageUpload(e, 'ad_sidebar')} className="absolute inset-0 opacity-0" accept="image/*"/>
+                   </div>
+                   <input 
+                     value={siteSettings.ads?.sidebar?.link || ''}
+                     onChange={(e) => handleAdLinkUpdate('sidebar', e.target.value)}
+                     className="flex-1 text-xs p-2 border rounded" 
+                     placeholder="বিজ্ঞাপনের লিংক (Link)..."
+                   />
+                </div>
+                {siteSettings.ads?.sidebar?.image && <p className="text-[10px] text-green-600">ছবি আপলোড হয়েছে</p>}
+              </div>
+
+               {/* In-Article Ad Config */}
+               <div>
+                <label className="text-xs font-bold text-red-600 block mb-2">৩. আর্টিকেলের ভেতরের বিজ্ঞাপন</label>
+                <div className="flex gap-2 mb-2">
+                   <div className="relative border p-2 w-16 h-12 bg-gray-50 rounded flex items-center justify-center cursor-pointer">
+                      <ImageIcon size={16} className="text-gray-400"/>
+                      <input type="file" onChange={(e) => handleImageUpload(e, 'ad_inArticle')} className="absolute inset-0 opacity-0" accept="image/*"/>
+                   </div>
+                   <input 
+                     value={siteSettings.ads?.inArticle?.link || ''}
+                     onChange={(e) => handleAdLinkUpdate('inArticle', e.target.value)}
+                     className="flex-1 text-xs p-2 border rounded" 
+                     placeholder="বিজ্ঞাপনের লিংক (Link)..."
+                   />
+                </div>
+                <p className="text-[10px] text-gray-500">এই বিজ্ঞাপনটি প্রতিটি খবরের বিস্তারিত পেজে ছবির নিচে দেখাবে।</p>
+                {siteSettings.ads?.inArticle?.image && <p className="text-[10px] text-green-600">ছবি আপলোড হয়েছে</p>}
               </div>
            </div>
 
@@ -614,26 +761,15 @@ export default function App() {
              <ShieldCheck size={32}/>
            </div>
            <h2 className="text-2xl font-bold">এডমিন লগইন</h2>
-           <p className="text-xs text-gray-500 mt-1">শুধুমাত্র কর্তৃপক্ষের জন্য</p>
         </div>
         <div className="space-y-4">
            <button 
              onClick={handleGoogleLogin} 
              className="w-full py-3 bg-white border border-gray-300 text-gray-700 font-bold rounded hover:bg-gray-50 shadow flex items-center justify-center gap-2"
            >
-             <svg className="w-5 h-5" viewBox="0 0 24 24">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-             </svg>
              Google দিয়ে লগইন করুন
            </button>
-           <div className="text-center mt-4">
-             <p className="text-xs text-red-500 bg-red-50 p-2 rounded border border-red-100">
-               সতর্কতা: শুধুমাত্র <b>eco452@gmail.com</b> ইমেইল দিয়ে এডিট করা যাবে।
-             </p>
-           </div>
+           <p className="text-xs text-center text-red-500">শুধুমাত্র eco452@gmail.com অনুমোদিত</p>
         </div>
       </div>
     </div>
@@ -649,7 +785,6 @@ export default function App() {
            </div>
            <div>
              <p className="font-bold text-sm">অ্যাপটি ইন্সটল করুন</p>
-             <p className="text-[10px] opacity-90">দ্রুত খবর পড়তে হোমস্ক্রিনে যুক্ত করুন</p>
            </div>
            <button onClick={handleInstallClick} className="bg-white text-red-600 px-3 py-1 rounded text-xs font-bold hover:bg-gray-100">
              Install
