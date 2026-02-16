@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged,
-  signInWithCustomToken
+  signInWithPopup,
+  GoogleAuthProvider,
+  signOut,
+  onAuthStateChanged
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -19,16 +20,11 @@ import {
 } from 'firebase/firestore';
 import { 
   Menu, X, Search, User, LogIn, Edit3, Trash2, 
-  Plus, Image as ImageIcon, Layout, Settings, 
-  Share2, Download, ShieldCheck, ChevronRight
+  Plus, Image as ImageIcon, Layout, ShieldCheck, 
+  Share2, Download, LogOut, ChevronRight, AlertTriangle
 } from 'lucide-react';
 
-// --- Firebase Configuration ---
-// দ্রষ্টব্য: প্রিভিউ মোডে কাজ করার জন্য আমরা সিস্টেম ভেরিয়েবল ব্যবহার করছি।
-// আপনি যখন আপনার নিজস্ব ডোমেইনে (firebase hosting) আপলোড করবেন, 
-// তখন নিচের commented অংশটি ব্যবহার করবেন।
-
- // আপনার কনফিগারেশন (ডিপ্লয় করার সময় এই অংশ আন-কমেন্ট করবেন এবং নিচের লাইনটি কমেন্ট করবেন)
+// --- Firebase Config ---
 const firebaseConfig = {
   apiKey: "AIzaSyAIw0NeSi-0Vb9hUwyGlhx4dA3r0dbTSYo",
   authDomain: "shajgoj-ea28b.firebaseapp.com",
@@ -38,14 +34,12 @@ const firebaseConfig = {
   appId: "1:1050845378650:web:656c247cdf22e954294063"
 };
 
-
-// প্রিভিউ এর জন্য ডিফল্ট কনফিগ
-
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const googleProvider = new GoogleAuthProvider();
+
+const appId = 'diganta-news-pwa'; 
 
 // --- Helper Functions ---
 const getBanglaDate = () => {
@@ -54,7 +48,6 @@ const getBanglaDate = () => {
   return date.toLocaleDateString('bn-BD', options);
 };
 
-// ইমেজ রিসাইজ ফাংশন (কমপ্রেশন)
 const resizeImage = (file) => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -62,7 +55,7 @@ const resizeImage = (file) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 800; // ইমেজের সাইজ কমানো হয়েছে দ্রুত লোডের জন্য
+        const MAX_WIDTH = 800; 
         const scaleSize = MAX_WIDTH / img.width;
         canvas.width = MAX_WIDTH;
         canvas.height = img.height * scaleSize;
@@ -76,10 +69,8 @@ const resizeImage = (file) => {
   });
 };
 
-// মেটা ট্যাগ আপডেট ফাংশন (SEO & OG Tags)
 const updateMetaTags = (title, image) => {
   document.title = title;
-  // ওপেন গ্রাফ ট্যাগ আপডেট (Simple Implementation)
   let metaOgTitle = document.querySelector('meta[property="og:title"]');
   if (!metaOgTitle) {
     metaOgTitle = document.createElement('meta');
@@ -87,21 +78,12 @@ const updateMetaTags = (title, image) => {
     document.head.appendChild(metaOgTitle);
   }
   metaOgTitle.content = title;
-
-  let metaOgImage = document.querySelector('meta[property="og:image"]');
-  if (!metaOgImage) {
-    metaOgImage = document.createElement('meta');
-    metaOgImage.setAttribute('property', 'og:image');
-    document.head.appendChild(metaOgImage);
-  }
-  metaOgImage.content = image || '';
 };
 
 // --- Components ---
 
-// Rich Text Editor (Updated)
 const RichTextEditor = ({ value, onChange }) => {
-  const insertTag = (tag, label) => {
+  const insertTag = (tag) => {
     const textarea = document.getElementById('news-content');
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
@@ -128,7 +110,7 @@ const RichTextEditor = ({ value, onChange }) => {
         className="w-full h-48 p-4 focus:outline-none resize-none font-serif text-lg"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="সংবাদের বিস্তারিত লিখুন..."
+        placeholder="সংবাদের বিস্তারিত লিখুন (HTML ট্যাগ সমর্থিত)..."
       />
     </div>
   );
@@ -137,9 +119,11 @@ const RichTextEditor = ({ value, onChange }) => {
 // --- Main App ---
 export default function App() {
   const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [view, setView] = useState('home'); 
   const [articles, setArticles] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [permissionError, setPermissionError] = useState(false);
   const [siteSettings, setSiteSettings] = useState({
     siteName: 'দিগন্ত',
     editorName: 'মঞ্জুরুল হক',
@@ -147,13 +131,10 @@ export default function App() {
     footerText: 'স্বত্ব © ২০২৬ দিগন্ত মিডিয়া'
   });
   
-  // Install Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showInstallBtn, setShowInstallBtn] = useState(false);
 
   // Admin State
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
-  const [adminPasswordInput, setAdminPasswordInput] = useState('');
   const [editArticle, setEditArticle] = useState(null);
   const [activeCategory, setActiveCategory] = useState('সব খবর');
   const [selectedArticle, setSelectedArticle] = useState(null);
@@ -161,24 +142,18 @@ export default function App() {
     title: '', content: '', category: 'বাংলাদেশ', image: '', isLead: false
   });
 
-  // --- Install Prompt Logic (20s Interval) ---
+  // --- Install Prompt Logic ---
   useEffect(() => {
-    // Listen for install event
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
     });
-
-    // Check every 20 seconds
     const interval = setInterval(() => {
-      // If prompt exists (meaning app not installed)
       if (deferredPrompt || !window.matchMedia('(display-mode: standalone)').matches) {
         setShowInstallBtn(true);
-        // Hide after 8 seconds to not be annoying, will reappear next cycle
         setTimeout(() => setShowInstallBtn(false), 8000);
       }
-    }, 20000); // 20 Seconds
-
+    }, 20000);
     return () => clearInterval(interval);
   }, [deferredPrompt]);
 
@@ -191,81 +166,101 @@ export default function App() {
         setShowInstallBtn(false);
       }
     } else {
-      alert("অ্যাপটি ইন্সটল করতে ব্রাউজারের মেনু থেকে 'Add to Home Screen' সিলেক্ট করুন।");
+      alert("ব্রাউজার মেনু থেকে 'Add to Home Screen' বা 'Install App' সিলেক্ট করুন।");
     }
   };
 
-  // --- Firebase Data ---
+  // --- Auth & Data ---
   useEffect(() => {
-    const initAuth = async () => {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-            await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-            await signInAnonymously(auth);
-        }
-    };
-    initAuth();
-    onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (currentUser && currentUser.email === 'eco452@gmail.com') {
+        setIsAdmin(true);
+      } else {
+        setIsAdmin(false);
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    
-    // Articles
-    const unsubArticles = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'articles')), (snap) => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      // Sort in JS
-      data.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
-      setArticles(data);
-    });
-
-    // Categories
-    const unsubCats = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), (snap) => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (data.length === 0) {
-        ['বাংলাদেশ', 'রাজনীতি', 'অর্থনীতি', 'আন্তর্জাতিক', 'খেলা', 'বিনোদন', 'প্রযুক্তি', 'মতামত'].forEach(name => 
-          addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name })
-        );
-      } else {
-        setCategories(data);
+    // Error Handling Wrapper
+    const handleError = (error) => {
+      console.error("Firebase Error:", error);
+      if (error.code === 'permission-denied') {
+        setPermissionError(true);
       }
-    });
+    };
 
-    // Settings
-    const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), (snap) => {
-      if (snap.exists()) setSiteSettings(snap.data());
-      else {
-         // Default settings
-         const def = {
-            siteName: 'দিগন্ত',
-            editorName: 'মঞ্জুরুল হক',
-            ads: { header: 'https://placehold.co/728x90/f3f4f6/374151?text=Header+Ad', sidebar: 'https://placehold.co/300x250/f3f4f6/374151?text=Sidebar+Ad' }
-         };
-         import('firebase/firestore').then(({ setDoc }) => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), def));
-      }
-    });
+    // Articles Fetching
+    const unsubArticles = onSnapshot(
+      query(collection(db, 'artifacts', appId, 'public', 'data', 'articles')), 
+      (snap) => {
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        data.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+        setArticles(data);
+        setPermissionError(false); // Clear error if successful
+      }, 
+      handleError
+    );
+
+    // Categories Fetching
+    const unsubCats = onSnapshot(
+      collection(db, 'artifacts', appId, 'public', 'data', 'categories'), 
+      (snap) => {
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (data.length === 0 && isAdmin) {
+          try {
+             ['বাংলাদেশ', 'রাজনীতি', 'অর্থনীতি', 'আন্তর্জাতিক', 'খেলা', 'বিনোদন', 'প্রযুক্তি', 'মতামত'].forEach(name => 
+               addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name })
+             );
+          } catch(e) { console.error("Auto create failed", e); }
+        } else {
+          setCategories(data);
+        }
+      }, 
+      handleError
+    );
+
+    // Settings Fetching
+    const unsubSettings = onSnapshot(
+      doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), 
+      (snap) => {
+        if (snap.exists()) setSiteSettings(snap.data());
+      }, 
+      handleError
+    );
 
     return () => { unsubArticles(); unsubCats(); unsubSettings(); };
-  }, [user]);
+  }, [isAdmin]);
 
   // --- Handlers ---
-  const handleAdminLogin = () => {
-    // Hardcoded Password for Demo
-    if (adminPasswordInput === '123456') {
-      setIsAdminLoggedIn(true);
-      setView('admin');
-    } else {
-      alert('ভুল পাসওয়ার্ড!');
+  const handleGoogleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      setView('home'); 
+    } catch (error) {
+      console.error(error);
+      alert("লগইন ব্যর্থ হয়েছে: " + error.message);
     }
   };
 
+  const handleLogout = async () => {
+    await signOut(auth);
+    setIsAdmin(false);
+    setView('home');
+  };
+
   const handleSaveArticle = async () => {
+    if (!isAdmin) return alert("শুধুমাত্র এডমিন পোস্ট করতে পারবেন");
     if (!formData.title) return alert('শিরোনাম দিন');
+    
     const payload = {
       ...formData,
       timestamp: serverTimestamp(),
-      author: 'নিজস্ব প্রতিবেদক'
+      author: siteSettings.editorName
     };
+    
     try {
       if (editArticle) {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'articles', editArticle.id), payload);
@@ -277,11 +272,12 @@ export default function App() {
       alert('সংবাদ সফলভাবে সংরক্ষিত হয়েছে');
     } catch (e) {
       console.error(e);
-      alert('ত্রুটি হয়েছে');
+      alert('ত্রুটি হয়েছে: পারমিশন নেই অথবা ইন্টারনেট সমস্যা');
     }
   };
 
   const handleDelete = async (id) => {
+    if(!isAdmin) return;
     if(confirm('মুছে ফেলতে চান?')) {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'articles', id));
     }
@@ -299,7 +295,6 @@ export default function App() {
   const Navbar = () => (
     <nav className="sticky top-0 bg-white z-40 border-b shadow-sm">
       <div className="container mx-auto">
-        {/* Mobile Horizontal Scroll Menu */}
         <div className="flex items-center overflow-x-auto whitespace-nowrap scrollbar-hide px-4 py-3 gap-6 md:justify-center">
             <button 
               onClick={() => { setActiveCategory('সব খবর'); setView('home'); window.scrollTo(0,0); }}
@@ -328,14 +323,31 @@ export default function App() {
 
     return (
       <div className="animate-fade-in">
-        {/* Header */}
+        {permissionError && (
+          <div className="bg-red-600 text-white p-4 text-center">
+             <div className="flex items-center justify-center gap-2 font-bold mb-1">
+               <AlertTriangle/> ডাটাবেজ পারমিশন সমস্যা
+             </div>
+             <p className="text-sm">দয়া করে ফায়ারবেস কনসোলের <b>Firestore Database {'>'} Rules</b> ট্যাবে গিয়ে নিচের রুলস আপডেট করুন।</p>
+          </div>
+        )}
+
         <div className="bg-white pt-4 pb-2 border-b">
           <div className="container mx-auto px-4 flex justify-between items-center text-xs text-gray-500 mb-2">
             <span>{getBanglaDate()}</span>
             <div className="flex items-center gap-3">
-              <button onClick={() => setView('login')} className="flex items-center gap-1 hover:text-red-600 font-bold">
-                 <User size={14}/> এডমিন
-              </button>
+              {isAdmin ? (
+                <div className="flex gap-2">
+                   <button onClick={() => setView('admin')} className="flex items-center gap-1 text-red-600 font-bold hover:underline">
+                     <ShieldCheck size={14}/> ড্যাশবোর্ড
+                   </button>
+                   <button onClick={handleLogout} className="text-gray-500 hover:text-black">লগ আউট</button>
+                </div>
+              ) : (
+                <button onClick={() => setView('login')} className="flex items-center gap-1 hover:text-red-600 font-bold">
+                   <User size={14}/> এডমিন লগইন
+                </button>
+              )}
             </div>
           </div>
           <div className="text-center py-4 relative">
@@ -352,10 +364,8 @@ export default function App() {
 
         <Navbar />
 
-        {/* Content */}
         <div className="container mx-auto px-4 py-6">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            {/* Main News */}
             <div className="lg:col-span-9">
               {lead && (
                 <div onClick={() => { setSelectedArticle(lead); setView('article'); updateMetaTags(lead.title, lead.image); }} className="mb-8 cursor-pointer group">
@@ -368,7 +378,7 @@ export default function App() {
                       <p className="text-gray-600 mt-3 text-lg line-clamp-3 leading-relaxed">
                         {lead.content.replace(/<[^>]+>/g, '')}
                       </p>
-                      <span className="text-xs text-gray-400 mt-4 block">আপডেট: ১ ঘণ্টা আগে</span>
+                      <span className="text-xs text-gray-400 mt-4 block">আপডেট: কিছুক্ষণ আগে</span>
                     </div>
                     <div className="order-1 md:order-2">
                       <div className="overflow-hidden rounded-lg aspect-video bg-gray-100">
@@ -381,6 +391,10 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+              )}
+
+              {!lead && !permissionError && (
+                 <div className="text-center py-20 text-gray-400">কোনো সংবাদ লোড হয়নি (ডাটাবেজ খালি অথবা লোড হচ্ছে...)</div>
               )}
 
               <div className="border-t border-gray-200 my-6"></div>
@@ -402,15 +416,12 @@ export default function App() {
               </div>
             </div>
 
-            {/* Sidebar */}
             <div className="lg:col-span-3 space-y-8 border-l border-gray-100 pl-0 lg:pl-6">
-               {/* Sidebar Ad */}
                {siteSettings.ads.sidebar && (
                  <div className="bg-gray-50 flex items-center justify-center min-h-[250px] rounded border">
                    <img src={siteSettings.ads.sidebar} alt="Ad" className="w-full" />
                  </div>
                )}
-
                <div>
                  <h4 className="font-bold text-xl border-b-2 border-red-600 inline-block mb-4 pr-4">সর্বাধিক পঠিত</h4>
                  <div className="space-y-4">
@@ -451,9 +462,7 @@ export default function App() {
                  <p className="text-gray-500">{getBanglaDate()}</p>
               </div>
            </div>
-           <div className="flex gap-3">
-             <button className="text-gray-400 hover:text-blue-600"><Share2 size={20}/></button>
-           </div>
+           <button className="text-gray-400 hover:text-blue-600"><Share2 size={20}/></button>
          </div>
          
          {selectedArticle.image && (
@@ -477,15 +486,17 @@ export default function App() {
         <div className="container mx-auto flex justify-between items-center">
           <h2 className="text-xl font-bold flex items-center gap-2 text-red-600"><ShieldCheck/> এডমিন প্যানেল</h2>
           <div className="flex gap-3">
+             <span className="hidden md:block text-sm py-2 px-3 bg-red-50 text-red-600 rounded">
+               {user?.email} হিসেবে লগইন করা
+             </span>
             <button onClick={() => setView('home')} className="bg-gray-100 px-4 py-2 rounded hover:bg-gray-200 text-sm">প্রিভিউ</button>
-            <button onClick={() => { setIsAdminLoggedIn(false); setView('home'); }} className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-sm">লগ আউট</button>
+            <button onClick={handleLogout} className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-sm">লগ আউট</button>
           </div>
         </div>
       </div>
 
       <div className="container mx-auto px-4 py-6 grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          {/* Editor */}
           <div className="bg-white p-6 rounded shadow">
              <h3 className="font-bold border-b pb-2 mb-4">{editArticle ? 'সংবাদ ইডিট করুন' : 'নতুন সংবাদ যুক্ত করুন'}</h3>
              <div className="space-y-4">
@@ -530,7 +541,6 @@ export default function App() {
              </div>
           </div>
           
-          {/* News List */}
           <div className="bg-white p-6 rounded shadow">
             <h3 className="font-bold border-b pb-2 mb-4">সকল সংবাদ ({articles.length})</h3>
             <div className="max-h-96 overflow-y-auto space-y-2">
@@ -551,9 +561,8 @@ export default function App() {
         </div>
 
         <div className="space-y-6">
-           {/* Ads Manager */}
            <div className="bg-white p-6 rounded shadow">
-              <h3 className="font-bold border-b pb-2 mb-4 flex items-center gap-2"><Layout size={18}/> বিজ্ঞাপন ম্যানেজ করুন</h3>
+              <h3 className="font-bold border-b pb-2 mb-4 flex items-center gap-2"><Layout size={18}/> বিজ্ঞাপন সেটিংস</h3>
               <div className="space-y-3">
                  <div>
                    <label className="text-xs font-bold text-gray-500">হেডার বিজ্ঞাপন (URL)</label>
@@ -577,7 +586,6 @@ export default function App() {
               </div>
            </div>
 
-           {/* Category Manager */}
            <div className="bg-white p-6 rounded shadow">
              <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold">ক্যাটাগরি</h3>
@@ -609,28 +617,28 @@ export default function App() {
            <p className="text-xs text-gray-500 mt-1">শুধুমাত্র কর্তৃপক্ষের জন্য</p>
         </div>
         <div className="space-y-4">
-           <div>
-             <label className="block text-sm font-bold text-gray-700 mb-1">পাসওয়ার্ড</label>
-             <input 
-               type="password" 
-               className="w-full p-3 border rounded focus:ring-2 focus:ring-red-500 outline-none"
-               value={adminPasswordInput}
-               onChange={(e) => setAdminPasswordInput(e.target.value)}
-               placeholder="******"
-             />
-           </div>
-           <button onClick={handleAdminLogin} className="w-full py-3 bg-red-600 text-white font-bold rounded hover:bg-red-700 shadow-lg">
-             লগইন করুন
+           <button 
+             onClick={handleGoogleLogin} 
+             className="w-full py-3 bg-white border border-gray-300 text-gray-700 font-bold rounded hover:bg-gray-50 shadow flex items-center justify-center gap-2"
+           >
+             <svg className="w-5 h-5" viewBox="0 0 24 24">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+             </svg>
+             Google দিয়ে লগইন করুন
            </button>
-           <div className="text-center">
-             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded">Demo Pass: 123456</span>
+           <div className="text-center mt-4">
+             <p className="text-xs text-red-500 bg-red-50 p-2 rounded border border-red-100">
+               সতর্কতা: শুধুমাত্র <b>eco452@gmail.com</b> ইমেইল দিয়ে এডিট করা যাবে।
+             </p>
            </div>
         </div>
       </div>
     </div>
   );
 
-  // Install Pop-up Button
   const InstallButton = () => (
     showInstallBtn ? (
       <div className="fixed top-20 right-4 z-50 animate-bounce">
@@ -654,11 +662,10 @@ export default function App() {
   return (
     <div className="font-sans text-gray-900 selection:bg-red-100 selection:text-red-900">
       <InstallButton />
-      
       {view === 'home' && <HomeView />}
       {view === 'article' && <ArticleView />}
       {view === 'login' && <LoginModal />}
-      {view === 'admin' && isAdminLoggedIn && <AdminView />}
+      {view === 'admin' && <AdminView />}
     </div>
   );
 }
