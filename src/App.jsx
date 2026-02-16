@@ -22,7 +22,8 @@ import {
 import { 
   Menu, X, Search, User, ShieldCheck, Edit3, Trash2, 
   Plus, Image as ImageIcon, Layout, Save,
-  Share2, Download, LogOut, ChevronRight, AlertTriangle, Link as LinkIcon, Upload
+  Share2, Download, LogOut, ChevronRight, AlertTriangle, 
+  Link as LinkIcon, Upload, FileText, Settings, Eye, List
 } from 'lucide-react';
 
 // --- Firebase Config ---
@@ -43,8 +44,8 @@ const googleProvider = new GoogleAuthProvider();
 const appId = 'diganta-news-pwa-v2'; 
 
 // --- Helper Functions ---
-const getBanglaDate = () => {
-  const date = new Date();
+const getBanglaDate = (seconds) => {
+  const date = seconds ? new Date(seconds * 1000) : new Date();
   const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
   return date.toLocaleDateString('bn-BD', options);
 };
@@ -80,10 +81,10 @@ const updateMetaTags = (title) => {
   metaOgTitle.content = title;
 };
 
-// --- Components (Outside Main App to fix re-rendering focus loss) ---
+// --- Components ---
 
+// Rich Text Editor (Optimized)
 const RichTextEditor = ({ value, onChange }) => {
-  // Simple ref to maintain cursor position could be added, but moving component outside fixes 90% issues
   const insertTag = (tag) => {
     const textarea = document.getElementById('news-content');
     const start = textarea.selectionStart;
@@ -97,11 +98,9 @@ const RichTextEditor = ({ value, onChange }) => {
     else if (tag === 'h3') newText = text.substring(0, start) + `<h3>${selection || 'হেডিং'}</h3>` + text.substring(end);
     else if (tag === 'p') newText = text.substring(0, start) + `<p>${selection || 'প্যারাগ্রাফ'}</p>` + text.substring(end);
     
-    // Insert text and update
     const newValue = newText;
     onChange(newValue);
     
-    // Restore focus (Micro-task to allow render)
     setTimeout(() => {
       textarea.focus();
       textarea.setSelectionRange(start + newText.length, start + newText.length);
@@ -109,16 +108,16 @@ const RichTextEditor = ({ value, onChange }) => {
   };
 
   return (
-    <div className="border rounded-md overflow-hidden border-gray-300">
-      <div className="bg-gray-100 p-2 flex gap-2 border-b flex-wrap">
-        <button type="button" onClick={() => insertTag('b')} className="px-3 py-1 bg-white border rounded font-bold hover:bg-red-50 text-sm">B</button>
-        <button type="button" onClick={() => insertTag('h3')} className="px-3 py-1 bg-white border rounded font-bold hover:bg-red-50 text-sm">H3</button>
-        <button type="button" onClick={() => insertTag('p')} className="px-3 py-1 bg-white border rounded hover:bg-red-50 text-sm">P</button>
-        <button type="button" onClick={() => insertTag('br')} className="px-3 py-1 bg-white border rounded hover:bg-red-50 text-sm">New Line</button>
+    <div className="border rounded-md overflow-hidden border-gray-300 bg-white">
+      <div className="bg-gray-50 p-2 flex gap-2 border-b flex-wrap">
+        <button type="button" onClick={() => insertTag('b')} className="px-3 py-1 bg-white border rounded font-bold hover:bg-orange-50 text-sm">B</button>
+        <button type="button" onClick={() => insertTag('h3')} className="px-3 py-1 bg-white border rounded font-bold hover:bg-orange-50 text-sm">H3</button>
+        <button type="button" onClick={() => insertTag('p')} className="px-3 py-1 bg-white border rounded hover:bg-orange-50 text-sm">P</button>
+        <button type="button" onClick={() => insertTag('br')} className="px-3 py-1 bg-white border rounded hover:bg-orange-50 text-sm">New Line</button>
       </div>
       <textarea
         id="news-content"
-        className="w-full h-64 p-4 focus:outline-none resize-none font-serif text-lg leading-relaxed"
+        className="w-full h-[400px] p-4 focus:outline-none resize-none font-serif text-lg leading-relaxed"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="এখানে সংবাদ লিখুন..."
@@ -153,7 +152,6 @@ const Navbar = ({ categories, activeCategory, setActiveCategory, setView }) => (
 
 const AdDisplay = ({ adData, className }) => {
   if (!adData || !adData.image) return null;
-  
   const Content = () => (
     <img 
       src={adData.image} 
@@ -161,7 +159,6 @@ const AdDisplay = ({ adData, className }) => {
       className={`w-full h-auto object-cover ${className}`} 
     />
   );
-
   if (adData.link) {
     return (
       <a href={adData.link} target="_blank" rel="noopener noreferrer" className="block cursor-pointer hover:opacity-90 transition">
@@ -181,10 +178,12 @@ export default function App() {
   const [categories, setCategories] = useState([]);
   const [permissionError, setPermissionError] = useState(false);
   
-  // Settings with specific Ad Objects
+  // Admin Panel Tab State (Blogger Style)
+  const [adminTab, setAdminTab] = useState('posts'); // posts, new-post, layout, settings
+  
   const [siteSettings, setSiteSettings] = useState({
     siteName: 'দিগন্ত',
-    logo: '', // Base64 logo
+    logo: '', 
     editorName: 'মঞ্জুরুল হক',
     footerText: 'স্বত্ব © ২০২৬ দিগন্ত মিডিয়া',
     ads: {
@@ -197,8 +196,8 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showInstallBtn, setShowInstallBtn] = useState(false);
 
-  // Admin State
-  const [editArticle, setEditArticle] = useState(null);
+  // Admin Editor State
+  const [editArticle, setEditArticle] = useState(null); // If null, create mode
   const [activeCategory, setActiveCategory] = useState('সব খবর');
   const [selectedArticle, setSelectedArticle] = useState(null);
   const [formData, setFormData] = useState({
@@ -252,7 +251,6 @@ export default function App() {
       if (error.code === 'permission-denied') setPermissionError(true);
     };
 
-    // Articles
     const unsubArticles = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'articles')), 
       (snap) => {
         const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -261,12 +259,10 @@ export default function App() {
         setPermissionError(false);
       }, handleError);
 
-    // Categories
     const unsubCats = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), 
       (snap) => {
         const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         if (data.length === 0 && isAdmin) {
-           // Init categories
            ['বাংলাদেশ', 'রাজনীতি', 'অর্থনীতি', 'আন্তর্জাতিক', 'খেলা', 'বিনোদন', 'প্রযুক্তি', 'মতামত'].forEach(name => 
              addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), { name })
            );
@@ -275,16 +271,14 @@ export default function App() {
         }
       }, handleError);
 
-    // Settings
     const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), 
       (snap) => {
         if (snap.exists()) {
           const data = snap.data();
-          // Merge with default structure to prevent errors if fields are missing
           setSiteSettings(prev => ({
             ...prev,
             ...data,
-            ads: { ...prev.ads, ...data.ads } // Deep merge ads
+            ads: { ...prev.ads, ...data.ads } 
           }));
         }
       }, handleError);
@@ -324,8 +318,10 @@ export default function App() {
       } else {
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'articles'), payload);
       }
+      // Reset logic
       setEditArticle(null);
       setFormData({ title: '', content: '', category: 'বাংলাদেশ', image: '', isLead: false });
+      setAdminTab('posts'); // Go back to list
       alert('সফলভাবে সংরক্ষিত হয়েছে');
     } catch (e) {
       alert('ত্রুটি: ' + e.message);
@@ -339,6 +335,18 @@ export default function App() {
     }
   };
 
+  const handleEditInit = (article) => {
+    setEditArticle(article);
+    setFormData(article);
+    setAdminTab('new-post');
+  };
+
+  const handleNewPostInit = () => {
+    setEditArticle(null);
+    setFormData({ title: '', content: '', category: 'বাংলাদেশ', image: '', isLead: false });
+    setAdminTab('new-post');
+  };
+
   const handleImageUpload = async (e, field) => {
     const file = e.target.files[0];
     if (file) {
@@ -348,7 +356,7 @@ export default function App() {
       } else if (field === 'logo') {
         handleSettingUpdate('logo', base64);
       } else if (field.startsWith('ad_')) {
-        const adType = field.split('_')[1]; // header, sidebar, inArticle
+        const adType = field.split('_')[1]; 
         const newAds = { ...siteSettings.ads, [adType]: { ...siteSettings.ads[adType], image: base64 } };
         handleSettingUpdate('ads', newAds);
       }
@@ -358,7 +366,6 @@ export default function App() {
   const handleSettingUpdate = async (key, value) => {
     const newSettings = { ...siteSettings, [key]: value };
     setSiteSettings(newSettings);
-    // Save directly to database
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), newSettings);
     } catch (e) {
@@ -372,6 +379,285 @@ export default function App() {
   };
 
   // --- Views ---
+
+  // *** ADMIN PANEL (Blogger Style) ***
+  const AdminView = () => {
+    return (
+      <div className="flex h-screen bg-gray-100 font-sans text-gray-800">
+        
+        {/* Sidebar (Left) */}
+        <div className="w-16 md:w-64 bg-white border-r flex flex-col shadow-sm z-20">
+           <div className="p-4 border-b flex items-center gap-2 text-orange-600">
+              <ShieldCheck size={28}/>
+              <span className="hidden md:block font-bold text-xl tracking-tight">Blogger Admin</span>
+           </div>
+           
+           <div className="p-4">
+              <button 
+                onClick={handleNewPostInit}
+                className="w-full flex items-center justify-center md:justify-start gap-2 bg-orange-600 text-white p-3 rounded-full shadow-md hover:bg-orange-700 transition"
+              >
+                <Plus size={20}/> <span className="hidden md:block font-bold">New Post</span>
+              </button>
+           </div>
+
+           <nav className="flex-1 overflow-y-auto mt-2">
+              <div 
+                onClick={() => setAdminTab('posts')}
+                className={`flex items-center gap-4 px-6 py-3 cursor-pointer hover:bg-orange-50 ${adminTab === 'posts' ? 'bg-orange-50 text-orange-600 border-r-4 border-orange-600' : 'text-gray-600'}`}
+              >
+                <FileText size={20}/> <span className="hidden md:block font-medium">Posts</span>
+              </div>
+              <div 
+                onClick={() => setAdminTab('layout')}
+                className={`flex items-center gap-4 px-6 py-3 cursor-pointer hover:bg-orange-50 ${adminTab === 'layout' ? 'bg-orange-50 text-orange-600 border-r-4 border-orange-600' : 'text-gray-600'}`}
+              >
+                <Layout size={20}/> <span className="hidden md:block font-medium">Layout (Ads)</span>
+              </div>
+              <div 
+                onClick={() => setAdminTab('settings')}
+                className={`flex items-center gap-4 px-6 py-3 cursor-pointer hover:bg-orange-50 ${adminTab === 'settings' ? 'bg-orange-50 text-orange-600 border-r-4 border-orange-600' : 'text-gray-600'}`}
+              >
+                <Settings size={20}/> <span className="hidden md:block font-medium">Settings</span>
+              </div>
+           </nav>
+           
+           <div className="p-4 border-t">
+              <button onClick={() => setView('home')} className="w-full text-left flex items-center gap-4 px-2 py-2 text-gray-600 hover:text-blue-600">
+                <Eye size={20}/> <span className="hidden md:block text-sm">View Blog</span>
+              </button>
+              <button onClick={handleLogout} className="w-full text-left flex items-center gap-4 px-2 py-2 text-gray-600 hover:text-red-600 mt-2">
+                <LogOut size={20}/> <span className="hidden md:block text-sm">Logout</span>
+              </button>
+           </div>
+        </div>
+
+        {/* Main Content Area (Right) */}
+        <div className="flex-1 flex flex-col overflow-hidden h-full">
+           
+           {/* Top Bar */}
+           <div className="bg-white border-b p-4 flex justify-between items-center shadow-sm z-10">
+              <h2 className="text-xl font-bold text-gray-700 capitalize">
+                {adminTab === 'posts' && 'All Posts'}
+                {adminTab === 'new-post' && (editArticle ? 'Edit Post' : 'Create New Post')}
+                {adminTab === 'layout' && 'Layout & Ads'}
+                {adminTab === 'settings' && 'Site Settings'}
+              </h2>
+              <div className="text-sm text-gray-500">{user?.email}</div>
+           </div>
+
+           {/* Content Body */}
+           <div className="flex-1 overflow-y-auto p-4 md:p-8">
+              
+              {/* 1. POSTS LIST */}
+              {adminTab === 'posts' && (
+                <div className="bg-white rounded-lg shadow-sm border">
+                   <div className="flex items-center p-4 border-b bg-gray-50 font-bold text-gray-600 text-sm">
+                      <div className="flex-1">Title</div>
+                      <div className="w-32 hidden md:block">Author</div>
+                      <div className="w-32 hidden md:block">Date</div>
+                      <div className="w-24 text-right">Actions</div>
+                   </div>
+                   {articles.map(article => (
+                     <div key={article.id} className="group flex items-center p-4 border-b hover:bg-gray-50 transition">
+                        <div className="flex-1 pr-4">
+                           <h3 className="font-bold text-gray-800 text-sm md:text-base cursor-pointer hover:text-orange-600" onClick={() => handleEditInit(article)}>
+                             {article.title}
+                           </h3>
+                           <div className="flex gap-2 mt-1 text-xs text-orange-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <span className="cursor-pointer hover:underline" onClick={() => handleEditInit(article)}>Edit</span>
+                              <span>|</span>
+                              <span className="cursor-pointer hover:underline" onClick={() => { setSelectedArticle(article); setView('article'); }}>View</span>
+                              <span>|</span>
+                              <span className="cursor-pointer hover:underline text-red-600" onClick={() => handleDelete(article.id)}>Delete</span>
+                           </div>
+                        </div>
+                        <div className="w-32 hidden md:block text-xs text-gray-500">{article.author}</div>
+                        <div className="w-32 hidden md:block text-xs text-gray-500">{article.timestamp ? new Date(article.timestamp.seconds * 1000).toLocaleDateString() : 'Draft'}</div>
+                        <div className="w-24 flex justify-end gap-2">
+                           <button onClick={() => handleDelete(article.id)} className="text-gray-400 hover:text-red-600"><Trash2 size={16}/></button>
+                        </div>
+                     </div>
+                   ))}
+                </div>
+              )}
+
+              {/* 2. EDITOR (NEW/EDIT POST) */}
+              {adminTab === 'new-post' && (
+                 <div className="flex flex-col lg:flex-row gap-6 h-full">
+                    {/* Left: Title & Editor */}
+                    <div className="flex-1 flex flex-col gap-4">
+                       <input 
+                         type="text" 
+                         placeholder="Title" 
+                         value={formData.title}
+                         onChange={(e) => setFormData({...formData, title: e.target.value})}
+                         className="w-full p-4 text-2xl font-bold border rounded shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-200"
+                       />
+                       <RichTextEditor value={formData.content} onChange={(val) => setFormData({...formData, content: val})} />
+                    </div>
+                    
+                    {/* Right: Sidebar Settings */}
+                    <div className="w-full lg:w-80 flex flex-col gap-4">
+                       <div className="bg-white p-4 rounded shadow-sm border">
+                          <h3 className="font-bold text-sm text-gray-600 mb-3 uppercase tracking-wider">Publish</h3>
+                          <button 
+                            onClick={handleSaveArticle}
+                            className="w-full py-2 bg-orange-600 text-white font-bold rounded hover:bg-orange-700 flex items-center justify-center gap-2"
+                          >
+                            <Save size={16}/> {editArticle ? 'Update' : 'Publish'}
+                          </button>
+                       </div>
+
+                       <div className="bg-white p-4 rounded shadow-sm border">
+                          <h3 className="font-bold text-sm text-gray-600 mb-3 uppercase tracking-wider">Labels</h3>
+                          <select 
+                            className="w-full p-2 border rounded bg-gray-50"
+                            value={formData.category}
+                            onChange={e => setFormData({...formData, category: e.target.value})}
+                          >
+                            {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                          </select>
+                          <button onClick={() => { const n = prompt('New Label Name:'); if(n) addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), {name: n}); }} className="mt-2 text-xs text-orange-600 hover:underline">+ Create new label</button>
+                       </div>
+
+                       <div className="bg-white p-4 rounded shadow-sm border">
+                          <h3 className="font-bold text-sm text-gray-600 mb-3 uppercase tracking-wider">Featured Image</h3>
+                          <div className="border border-dashed p-4 rounded bg-gray-50 text-center cursor-pointer relative hover:bg-gray-100">
+                             {formData.image ? (
+                               <img src={formData.image} className="w-full h-32 object-cover rounded"/>
+                             ) : (
+                               <div className="flex flex-col items-center text-gray-400">
+                                 <ImageIcon size={24}/>
+                                 <span className="text-xs mt-1">Upload Image</span>
+                               </div>
+                             )}
+                             <input type="file" onChange={(e) => handleImageUpload(e, 'article')} className="absolute inset-0 opacity-0" accept="image/*"/>
+                          </div>
+                       </div>
+
+                       <div className="bg-white p-4 rounded shadow-sm border">
+                          <h3 className="font-bold text-sm text-gray-600 mb-3 uppercase tracking-wider">Options</h3>
+                          <div className="flex items-center gap-2">
+                             <input type="checkbox" id="leadCheck" checked={formData.isLead} onChange={e => setFormData({...formData, isLead: e.target.checked})} className="w-4 h-4 text-orange-600" />
+                             <label htmlFor="leadCheck" className="text-sm">Feature as Lead News</label>
+                          </div>
+                       </div>
+                    </div>
+                 </div>
+              )}
+
+              {/* 3. LAYOUT (ADS) */}
+              {adminTab === 'layout' && (
+                <div className="max-w-4xl mx-auto space-y-6">
+                   <div className="bg-orange-50 border border-orange-200 p-4 rounded-md">
+                     <h3 className="font-bold text-orange-800">Layout Configuration</h3>
+                     <p className="text-sm text-orange-700">Manage your site's advertisements here. Click the upload icon to add images and paste links.</p>
+                   </div>
+                   
+                   {/* Header Ad */}
+                   <div className="bg-white p-6 rounded shadow-sm border relative">
+                      <span className="absolute top-4 right-4 bg-gray-200 text-gray-600 px-2 py-1 text-xs font-bold rounded">Header Gadget</span>
+                      <h4 className="font-bold text-lg mb-4">Header Banner (728x90)</h4>
+                      <div className="flex gap-4 items-start">
+                         <div className="w-1/3 border-2 border-dashed h-24 rounded flex items-center justify-center relative bg-gray-50 hover:bg-gray-100 cursor-pointer">
+                            {siteSettings.ads.header?.image ? <img src={siteSettings.ads.header.image} className="h-full w-full object-contain"/> : <span className="text-gray-400 text-xs">Upload</span>}
+                            <input type="file" onChange={(e) => handleImageUpload(e, 'ad_header')} className="absolute inset-0 opacity-0" accept="image/*"/>
+                         </div>
+                         <div className="flex-1">
+                            <label className="text-xs font-bold text-gray-500 block mb-1">Target URL</label>
+                            <input 
+                              value={siteSettings.ads.header?.link || ''}
+                              onChange={(e) => handleAdLinkUpdate('header', e.target.value)}
+                              className="w-full p-2 border rounded text-sm" placeholder="https://..."
+                            />
+                            <button onClick={() => handleSettingUpdate('ads', siteSettings.ads)} className="mt-2 text-xs bg-gray-800 text-white px-3 py-1 rounded">Save</button>
+                         </div>
+                      </div>
+                   </div>
+
+                   {/* Sidebar Ad */}
+                   <div className="bg-white p-6 rounded shadow-sm border relative">
+                      <span className="absolute top-4 right-4 bg-gray-200 text-gray-600 px-2 py-1 text-xs font-bold rounded">Sidebar Gadget</span>
+                      <h4 className="font-bold text-lg mb-4">Sidebar Square (300x250)</h4>
+                      <div className="flex gap-4 items-start">
+                         <div className="w-1/3 border-2 border-dashed h-32 rounded flex items-center justify-center relative bg-gray-50 hover:bg-gray-100 cursor-pointer">
+                            {siteSettings.ads.sidebar?.image ? <img src={siteSettings.ads.sidebar.image} className="h-full w-full object-contain"/> : <span className="text-gray-400 text-xs">Upload</span>}
+                            <input type="file" onChange={(e) => handleImageUpload(e, 'ad_sidebar')} className="absolute inset-0 opacity-0" accept="image/*"/>
+                         </div>
+                         <div className="flex-1">
+                            <label className="text-xs font-bold text-gray-500 block mb-1">Target URL</label>
+                            <input 
+                              value={siteSettings.ads.sidebar?.link || ''}
+                              onChange={(e) => handleAdLinkUpdate('sidebar', e.target.value)}
+                              className="w-full p-2 border rounded text-sm" placeholder="https://..."
+                            />
+                            <button onClick={() => handleSettingUpdate('ads', siteSettings.ads)} className="mt-2 text-xs bg-gray-800 text-white px-3 py-1 rounded">Save</button>
+                         </div>
+                      </div>
+                   </div>
+
+                   {/* Article Ad */}
+                   <div className="bg-white p-6 rounded shadow-sm border relative">
+                      <span className="absolute top-4 right-4 bg-gray-200 text-gray-600 px-2 py-1 text-xs font-bold rounded">Post Body Gadget</span>
+                      <h4 className="font-bold text-lg mb-4">In-Article Banner</h4>
+                      <div className="flex gap-4 items-start">
+                         <div className="w-1/3 border-2 border-dashed h-24 rounded flex items-center justify-center relative bg-gray-50 hover:bg-gray-100 cursor-pointer">
+                            {siteSettings.ads.inArticle?.image ? <img src={siteSettings.ads.inArticle.image} className="h-full w-full object-contain"/> : <span className="text-gray-400 text-xs">Upload</span>}
+                            <input type="file" onChange={(e) => handleImageUpload(e, 'ad_inArticle')} className="absolute inset-0 opacity-0" accept="image/*"/>
+                         </div>
+                         <div className="flex-1">
+                            <label className="text-xs font-bold text-gray-500 block mb-1">Target URL</label>
+                            <input 
+                              value={siteSettings.ads.inArticle?.link || ''}
+                              onChange={(e) => handleAdLinkUpdate('inArticle', e.target.value)}
+                              className="w-full p-2 border rounded text-sm" placeholder="https://..."
+                            />
+                            <button onClick={() => handleSettingUpdate('ads', siteSettings.ads)} className="mt-2 text-xs bg-gray-800 text-white px-3 py-1 rounded">Save</button>
+                         </div>
+                      </div>
+                   </div>
+                </div>
+              )}
+
+              {/* 4. SETTINGS */}
+              {adminTab === 'settings' && (
+                 <div className="max-w-2xl mx-auto bg-white rounded shadow-sm border p-6 space-y-6">
+                    <h3 className="font-bold text-lg border-b pb-2">Basic Settings</h3>
+                    
+                    <div>
+                      <label className="font-bold text-sm text-gray-600">Title</label>
+                      <input value={siteSettings.siteName} onChange={e => handleSettingUpdate('siteName', e.target.value)} className="w-full p-2 border rounded mt-1"/>
+                    </div>
+
+                    <div>
+                      <label className="font-bold text-sm text-gray-600">Description / Footer Text</label>
+                      <input value={siteSettings.footerText} onChange={e => handleSettingUpdate('footerText', e.target.value)} className="w-full p-2 border rounded mt-1"/>
+                    </div>
+
+                    <div>
+                      <label className="font-bold text-sm text-gray-600">Logo</label>
+                      <div className="flex items-center gap-4 mt-1">
+                        {siteSettings.logo && <img src={siteSettings.logo} className="h-12 border p-1 rounded"/>}
+                        <label className="cursor-pointer bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded text-sm font-bold text-gray-600">
+                           Upload Logo
+                           <input type="file" onChange={(e) => handleImageUpload(e, 'logo')} className="hidden" accept="image/*"/>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="font-bold text-sm text-gray-600">Editor Name</label>
+                      <input value={siteSettings.editorName} onChange={e => handleSettingUpdate('editorName', e.target.value)} className="w-full p-2 border rounded mt-1"/>
+                    </div>
+                 </div>
+              )}
+
+           </div>
+        </div>
+      </div>
+    );
+  };
 
   const HomeView = () => {
     const filtered = activeCategory === 'সব খবর' ? articles : articles.filter(a => a.category === activeCategory);
@@ -539,7 +825,7 @@ export default function App() {
               </div>
               <div className="text-xs">
                  <p className="font-bold text-gray-800">{selectedArticle.author}</p>
-                 <p className="text-gray-500">{getBanglaDate()}</p>
+                 <p className="text-gray-500">{getBanglaDate(selectedArticle.timestamp?.seconds)}</p>
               </div>
            </div>
            <button className="text-gray-400 hover:text-blue-600"><Share2 size={20}/></button>
@@ -573,182 +859,6 @@ export default function App() {
                 <p className="text-sm text-gray-500">{siteSettings.footerText}</p>
             </div>
         </footer>
-    </div>
-  );
-
-  const AdminView = () => (
-    <div className="min-h-screen bg-gray-100 pb-20">
-      <div className="bg-white shadow p-4 sticky top-0 z-30">
-        <div className="container mx-auto flex justify-between items-center">
-          <h2 className="text-xl font-bold flex items-center gap-2 text-red-600"><ShieldCheck/> এডমিন প্যানেল</h2>
-          <div className="flex gap-3">
-             <span className="hidden md:block text-sm py-2 px-3 bg-red-50 text-red-600 rounded">
-               {user?.email}
-             </span>
-            <button onClick={() => setView('home')} className="bg-gray-100 px-4 py-2 rounded hover:bg-gray-200 text-sm">প্রিভিউ</button>
-            <button onClick={handleLogout} className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-sm">লগ আউট</button>
-          </div>
-        </div>
-      </div>
-
-      <div className="container mx-auto px-4 py-6 grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white p-6 rounded shadow">
-             <h3 className="font-bold border-b pb-2 mb-4">{editArticle ? 'সংবাদ ইডিট করুন' : 'নতুন সংবাদ যুক্ত করুন'}</h3>
-             <div className="space-y-4">
-                <input 
-                  className="w-full p-2 border rounded font-bold text-lg focus:ring-2 focus:ring-red-200 outline-none" 
-                  placeholder="শিরোনাম লিখুন..."
-                  value={formData.title}
-                  onChange={e => setFormData({...formData, title: e.target.value})}
-                />
-                <div className="flex gap-4">
-                   <select 
-                     className="p-2 border rounded bg-white flex-1"
-                     value={formData.category}
-                     onChange={e => setFormData({...formData, category: e.target.value})}
-                   >
-                     {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                   </select>
-                   <div className="flex items-center gap-2 border px-3 rounded bg-gray-50 cursor-pointer relative overflow-hidden flex-1 justify-center">
-                      <ImageIcon size={18} className="text-gray-500"/>
-                      <span className="text-sm text-gray-600">{formData.image ? 'ছবি যুক্ত' : 'ছবি'}</span>
-                      <input type="file" onChange={(e) => handleImageUpload(e, 'article')} className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*"/>
-                   </div>
-                </div>
-                
-                <div className="flex items-center gap-2 my-2">
-                   <input type="checkbox" id="leadCheck" checked={formData.isLead} onChange={e => setFormData({...formData, isLead: e.target.checked})} className="w-4 h-4 text-red-600" />
-                   <label htmlFor="leadCheck" className="text-sm font-bold text-red-600">লিড নিউজ</label>
-                </div>
-
-                <RichTextEditor value={formData.content} onChange={(val) => setFormData({...formData, content: val})} />
-                
-                <div className="flex justify-end gap-3 pt-2">
-                  {editArticle && <button onClick={() => { setEditArticle(null); setFormData({title: '', content: '', category: 'বাংলাদেশ', image: '', isLead: false}); }} className="px-4 py-2 bg-gray-200 rounded">বাতিল</button>}
-                  <button onClick={handleSaveArticle} className="px-6 py-2 bg-red-600 text-white font-bold rounded hover:bg-red-700 flex items-center gap-2"><Save size={16}/> সংরক্ষণ করুন</button>
-                </div>
-             </div>
-          </div>
-          
-          <div className="bg-white p-6 rounded shadow">
-            <h3 className="font-bold border-b pb-2 mb-4">সকল সংবাদ ({articles.length})</h3>
-            <div className="max-h-96 overflow-y-auto space-y-2">
-              {articles.map(news => (
-                <div key={news.id} className="flex justify-between items-center p-2 hover:bg-gray-50 border rounded">
-                   <div className="flex gap-2 items-center overflow-hidden">
-                     {news.image && <img src={news.image} className="w-10 h-10 object-cover rounded" />}
-                     <span className="truncate font-medium text-sm">{news.title}</span>
-                   </div>
-                   <div className="flex gap-2 shrink-0">
-                      <button onClick={() => { setEditArticle(news); setFormData(news); window.scrollTo(0,0); }} className="text-blue-600 p-1 hover:bg-blue-50 rounded"><Edit3 size={16}/></button>
-                      <button onClick={() => handleDelete(news.id)} className="text-red-600 p-1 hover:bg-red-50 rounded"><Trash2 size={16}/></button>
-                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-6">
-           {/* General Settings */}
-           <div className="bg-white p-6 rounded shadow">
-              <h3 className="font-bold border-b pb-2 mb-4">সাইট সেটিংস</h3>
-              <div className="space-y-3">
-                 <div>
-                   <label className="text-xs font-bold text-gray-500">সাইটের নাম</label>
-                   <input value={siteSettings.siteName} onChange={e => handleSettingUpdate('siteName', e.target.value)} className="w-full text-xs p-2 border rounded"/>
-                 </div>
-                 <div>
-                   <label className="text-xs font-bold text-gray-500">লোগো আপলোড</label>
-                   <div className="border border-dashed p-2 rounded flex items-center justify-center relative bg-gray-50 cursor-pointer">
-                      {siteSettings.logo ? <img src={siteSettings.logo} className="h-8"/> : <span className="text-xs text-gray-400">Upload Logo</span>}
-                      <input type="file" onChange={(e) => handleImageUpload(e, 'logo')} className="absolute inset-0 opacity-0" accept="image/*"/>
-                   </div>
-                 </div>
-                 <div>
-                   <label className="text-xs font-bold text-gray-500">ফুটার টেক্সট</label>
-                   <input value={siteSettings.footerText} onChange={e => handleSettingUpdate('footerText', e.target.value)} className="w-full text-xs p-2 border rounded"/>
-                 </div>
-              </div>
-           </div>
-
-           {/* Ads Manager */}
-           <div className="bg-white p-6 rounded shadow">
-              <h3 className="font-bold border-b pb-2 mb-4 flex items-center gap-2"><Layout size={18}/> বিজ্ঞাপন ম্যানেজ করুন</h3>
-              
-              {/* Header Ad Config */}
-              <div className="mb-4 border-b pb-4">
-                <label className="text-xs font-bold text-red-600 block mb-2">১. হেডার বিজ্ঞাপন</label>
-                <div className="flex gap-2 mb-2">
-                   <div className="relative border p-2 w-16 h-12 bg-gray-50 rounded flex items-center justify-center cursor-pointer">
-                      <ImageIcon size={16} className="text-gray-400"/>
-                      <input type="file" onChange={(e) => handleImageUpload(e, 'ad_header')} className="absolute inset-0 opacity-0" accept="image/*"/>
-                   </div>
-                   <input 
-                     value={siteSettings.ads?.header?.link || ''}
-                     onChange={(e) => handleAdLinkUpdate('header', e.target.value)}
-                     className="flex-1 text-xs p-2 border rounded" 
-                     placeholder="বিজ্ঞাপনের লিংক (Link)..."
-                   />
-                </div>
-                {siteSettings.ads?.header?.image && <p className="text-[10px] text-green-600">ছবি আপলোড হয়েছে</p>}
-              </div>
-
-              {/* Sidebar Ad Config */}
-              <div className="mb-4 border-b pb-4">
-                <label className="text-xs font-bold text-red-600 block mb-2">২. সাইডবার বিজ্ঞাপন</label>
-                <div className="flex gap-2 mb-2">
-                   <div className="relative border p-2 w-16 h-12 bg-gray-50 rounded flex items-center justify-center cursor-pointer">
-                      <ImageIcon size={16} className="text-gray-400"/>
-                      <input type="file" onChange={(e) => handleImageUpload(e, 'ad_sidebar')} className="absolute inset-0 opacity-0" accept="image/*"/>
-                   </div>
-                   <input 
-                     value={siteSettings.ads?.sidebar?.link || ''}
-                     onChange={(e) => handleAdLinkUpdate('sidebar', e.target.value)}
-                     className="flex-1 text-xs p-2 border rounded" 
-                     placeholder="বিজ্ঞাপনের লিংক (Link)..."
-                   />
-                </div>
-                {siteSettings.ads?.sidebar?.image && <p className="text-[10px] text-green-600">ছবি আপলোড হয়েছে</p>}
-              </div>
-
-               {/* In-Article Ad Config */}
-               <div>
-                <label className="text-xs font-bold text-red-600 block mb-2">৩. আর্টিকেলের ভেতরের বিজ্ঞাপন</label>
-                <div className="flex gap-2 mb-2">
-                   <div className="relative border p-2 w-16 h-12 bg-gray-50 rounded flex items-center justify-center cursor-pointer">
-                      <ImageIcon size={16} className="text-gray-400"/>
-                      <input type="file" onChange={(e) => handleImageUpload(e, 'ad_inArticle')} className="absolute inset-0 opacity-0" accept="image/*"/>
-                   </div>
-                   <input 
-                     value={siteSettings.ads?.inArticle?.link || ''}
-                     onChange={(e) => handleAdLinkUpdate('inArticle', e.target.value)}
-                     className="flex-1 text-xs p-2 border rounded" 
-                     placeholder="বিজ্ঞাপনের লিংক (Link)..."
-                   />
-                </div>
-                <p className="text-[10px] text-gray-500">এই বিজ্ঞাপনটি প্রতিটি খবরের বিস্তারিত পেজে ছবির নিচে দেখাবে।</p>
-                {siteSettings.ads?.inArticle?.image && <p className="text-[10px] text-green-600">ছবি আপলোড হয়েছে</p>}
-              </div>
-           </div>
-
-           <div className="bg-white p-6 rounded shadow">
-             <div className="flex justify-between items-center mb-4">
-                <h3 className="font-bold">ক্যাটাগরি</h3>
-                <button onClick={() => { const n = prompt('নাম:'); if(n) addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'categories'), {name: n}); }} className="bg-red-100 text-red-600 p-1 rounded"><Plus size={16}/></button>
-             </div>
-             <div className="flex flex-wrap gap-2">
-               {categories.map(c => (
-                 <span key={c.id} className="bg-gray-100 px-2 py-1 rounded text-xs flex items-center gap-1">
-                   {c.name}
-                   <X size={12} className="cursor-pointer hover:text-red-600" onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'categories', c.id))}/>
-                 </span>
-               ))}
-             </div>
-           </div>
-        </div>
-      </div>
     </div>
   );
 
